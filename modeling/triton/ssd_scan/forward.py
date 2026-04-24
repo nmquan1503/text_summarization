@@ -227,7 +227,7 @@ def ssd_scan_forward(
     C: torch.Tensor,
     delta_raw: torch.Tensor,
     delta_bias: torch.Tensor | None,
-    h_init: torch.Tensor,
+    h_init: torch.Tensor | None,
     length: torch.Tensor,
     chunk_size: int,
     use_delta_softplus: bool = True,
@@ -246,6 +246,7 @@ def ssd_scan_forward(
     
     Returns:
         y: (batch_size, seq_len, num_heads, head_dim)
+        h_last: (batch_size, num_heads, head_dim, state_dim)
     """
     batch_size, seq_len, num_heads, head_dim = u.shape
     _, _, num_groups, state_dim = B.shape
