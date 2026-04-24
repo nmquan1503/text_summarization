@@ -22,9 +22,10 @@ from modeling.triton.softplus import softplus
 @triton.jit
 def chunk_scan_backward_h_kernel(
     C_ptr,  # (batch_size, seq_len, num_groups, state_dim)
-    decay_cumsum_ptr,   # (batch_size, num_heads, num_chunks, chunk_size),
+    decay_cumsum_ptr,   # (batch_size, num_heads, num_chunks, chunk_size)
     y_grad_ptr, # (batch_size, seq_len, num_heads, head_dim)
     h_grad_ptr, # (batch_size, num_chunks, num_heads, head_dim, state_dim)
+    length_ptr, # (batch_size)
 
     batch_size, seq_len, num_chunks, chunk_size, head_dim, state_dim, num_heads_per_group,
 
@@ -32,7 +33,8 @@ def chunk_scan_backward_h_kernel(
     decay_cumsum_batch_stride, decay_cumsum_head_stride, decay_cumsum_chunk_stride, decay_cumsum_chunk_element_stride,
     y_grad_batch_stride, y_grad_seq_stride, y_grad_head_stride, y_grad_head_element_stride,
     h_grad_batch_stride, h_grad_chunk_stride, h_grad_head_stride, h_grad_head_element_stride, h_grad_state_element_stride,
-    
+    length_batch_stride,
+
     HEAD_TILE_SIZE: tl.constexpr,
     STATE_TILE_SIZE: tl.constexpr,
     CHUNK_REDUCE_SIZE: tl.constexpr
@@ -45,7 +47,6 @@ def chunk_scan_backward_h_kernel(
     num_state_tiles = tl.cdiv(state_dim, STATE_TILE_SIZE)
     head_tile_id = tl.program_id(axis=0) // num_state_tiles
     state_tile_id = tl.program_id(axis=0) % num_state_tiles
-    chunk_size_limit = min(chunk_size, seq_len - chunk_id * chunk_size)
 
     # Compute the element indices for this tile
     head_tile_element_ids = head_tile_id * HEAD_TILE_SIZE + tl.arange(0, HEAD_TILE_SIZE)
@@ -57,12 +58,16 @@ def chunk_scan_backward_h_kernel(
     decay_cumsum_ptr += batch_id * decay_cumsum_batch_stride + chunk_id * decay_cumsum_chunk_stride + head_id * decay_cumsum_head_stride
     y_grad_ptr += batch_id * y_grad_batch_stride + chunk_id * chunk_size * y_grad_seq_stride + head_id * y_grad_head_stride
     h_grad_ptr += batch_id * h_grad_batch_stride + chunk_id * h_grad_chunk_stride + head_id * h_grad_head_stride
+    length_ptr += batch_id * length_batch_stride
 
     # Set up matrix pointers for the tile
     C_ptrs = C_ptr + (state_tile_element_ids[None, :] * C_state_element_stride + chunk_reduce_element_ids[:, None] * C_seq_stride)
     decay_cumsum_ptrs = decay_cumsum_ptr + chunk_reduce_element_ids * decay_cumsum_chunk_element_stride
     y_grad_ptrs = y_grad_ptr + (head_tile_element_ids[:, None] * y_grad_head_element_stride + chunk_reduce_element_ids[None, :] * y_grad_seq_stride)
     h_grad_ptrs = h_grad_ptr + (head_tile_element_ids[:, None] * h_grad_head_element_stride + state_tile_element_ids[None, :] * h_grad_state_element_stride)
+
+    length = tl.load(length_ptr)
+    chunk_size_limit = min(chunk_size, length - chunk_id * chunk_size)
 
     # Accumulate h_grad = sum over chunk positions: y_grad * exp(decay_cumsum) * C
     h_grad = tl.zeros((HEAD_TILE_SIZE, STATE_TILE_SIZE), dtype=tl.float32)
@@ -196,6 +201,7 @@ def chunk_scan_chunk_state_backward_u_kernel(
     h_grad_ptr, # (batch_size, num_chunks, num_heads, head_dim, state_dim)
     u_grad_ptr, # (batch_size, seq_len, num_heads, head_dim)
     delta_grad_ptr, # (batch_size, num_heads, num_chunks, chunk_size)
+    length_ptr, # (batch_size,)
 
     batch_size, seq_len, chunk_size, head_dim, state_dim, num_heads_per_group,
 
@@ -208,6 +214,7 @@ def chunk_scan_chunk_state_backward_u_kernel(
     h_grad_batch_stride, h_grad_chunk_stride, h_grad_head_stride, h_grad_head_element_stride, h_grad_state_element_stride,
     u_grad_batch_stride, u_grad_seq_stride, u_grad_head_stride, u_grad_head_element_stride,
     delta_grad_batch_stride, delta_grad_head_stride, delta_grad_chunk_stride, delta_grad_chunk_element_stride,
+    length_batch_stride,
 
     CHUNK_TILE_SIZE: tl.constexpr,
     HEAD_TILE_SIZE: tl.constexpr,
@@ -240,8 +247,10 @@ def chunk_scan_chunk_state_backward_u_kernel(
     h_grad_ptr += batch_id * h_grad_batch_stride + chunk_id * h_grad_chunk_stride + head_id * h_grad_head_stride
     u_grad_ptr += batch_id * u_grad_batch_stride + chunk_id * chunk_size * u_grad_seq_stride + head_id * u_grad_head_stride
     delta_grad_ptr += batch_id * delta_grad_batch_stride + head_id * delta_grad_head_stride + chunk_id * delta_grad_chunk_stride
+    length_ptr += batch_id * length_batch_stride
 
-    chunk_size_limit = min(chunk_size, seq_len - chunk_id * chunk_size)
+    length = tl.load(length_ptr)
+    chunk_size_limit = min(chunk_size, length - chunk_id * chunk_size)
     acc = tl.zeros((CHUNK_TILE_SIZE, HEAD_TILE_SIZE), dtype=tl.float32)
 
     # Precompute scale = exp(decay_cumsum_last - decay_cumsum_current) for the chunk tile
@@ -332,6 +341,7 @@ def chunk_state_backward_B_kernel(
     h_grad_ptr, # (batch_size, num_chunks, num_heads, head_dim, state_dim)
     decay_grad_from_B_ptr,  # (batch_size, num_heads, num_chunks, chunk_size)
     B_grad_ptr, # (batch_size, seq_len, num_splits, num_groups, state_dim)
+    length_ptr, # (batch_size,)
 
     batch_size, seq_len, chunk_size, num_heads, head_dim, state_dim, num_groups, num_heads_per_program,
 
@@ -342,6 +352,7 @@ def chunk_state_backward_B_kernel(
     h_grad_batch_stride, h_grad_chunk_stride, h_grad_head_stride, h_grad_head_element_stride, h_grad_state_element_stride,
     decay_grad_from_B_batch_stride, decay_grad_from_B_head_stride, decay_grad_from_B_chunk_stride, decay_grad_from_B_chunk_element_stride,
     B_grad_batch_stride, B_grad_seq_stride, B_grad_split_stride, B_grad_group_stride, B_grad_state_dim,
+    length_batch_stride,
 
     CHUNK_TILE_SIZE: tl.constexpr,
     STATE_TILE_SIZE: tl.constexpr,
@@ -370,12 +381,12 @@ def chunk_state_backward_B_kernel(
     h_grad_ptr += batch_id * h_grad_batch_stride + chunk_id * h_grad_chunk_stride + head_start * h_grad_head_stride
     delta_ptr += batch_id * delta_batch_stride + head_start * delta_head_stride + chunk_id * delta_chunk_stride
     decay_cumsum_ptr += batch_id * decay_cumsum_batch_stride + head_start * decay_cumsum_head_stride + chunk_id * decay_cumsum_chunk_stride
-
     B_ptr += batch_id * B_batch_stride + chunk_id * chunk_size * B_seq_stride + group_id * B_group_stride
-
     decay_grad_from_B_ptr += batch_id * decay_grad_from_B_batch_stride + head_start * decay_grad_from_B_head_stride + chunk_id * decay_grad_from_B_chunk_stride
+    length_ptr += batch_id * length_batch_stride
 
-    chunk_size_limit = min(chunk_size, seq_len - chunk_id * chunk_size)
+    length = tl.load(length_ptr)
+    chunk_size_limit = min(chunk_size, length - chunk_id * chunk_size)
 
     B_grad_acc = tl.zeros((CHUNK_TILE_SIZE, STATE_TILE_SIZE), dtype=tl.float32)
 
@@ -452,6 +463,7 @@ def chunk_scan_backward_C_grad_kernel(
     y_grad_ptr, # (batch_size, seq_len, num_heads, head_dim)
     decay_grad_from_C_ptr,  # (batch_size, num_heads, num_chunks, chunk_size)
     C_grad_ptr, # (batch_size, seq_len, num_splits, num_groups, state_dim)
+    length_ptr, # (batch_size,)
 
     batch_size, seq_len, chunk_size, num_groups, num_heads, head_dim, state_dim, num_heads_per_program,
 
@@ -461,6 +473,7 @@ def chunk_scan_backward_C_grad_kernel(
     y_grad_batch_stride, y_grad_seq_stride, y_grad_head_stride, y_grad_head_element_stride,
     decay_grad_from_C_batch_stride, decay_grad_from_C_head_stride, decay_grad_from_C_chunk_stride, decay_grad_from_C_chunk_element_stride,
     C_grad_batch_stride, C_grad_seq_stride, C_grad_split_stride, C_grad_group_stride, C_grad_state_element_stride,
+    length_batch_stride,
 
     CHUNK_TILE_SIZE: tl.constexpr,
     STATE_TILE_SIZE: tl.constexpr,
@@ -490,8 +503,10 @@ def chunk_scan_backward_C_grad_kernel(
     decay_cumsum_ptr += batch_id * decay_cumsum_batch_stride + head_start * decay_cumsum_head_stride + chunk_id * decay_cumsum_chunk_stride
     C_ptr += batch_id * C_batch_stride + chunk_id * chunk_size * C_seq_stride + group_id * C_group_stride
     decay_grad_from_C_ptr += batch_id * decay_grad_from_C_batch_stride + head_start * decay_grad_from_C_head_stride + chunk_id * decay_grad_from_C_chunk_stride
+    length_ptr += batch_id * length_batch_stride
 
-    chunk_size_limit = min(chunk_size, seq_len - chunk_id * chunk_size)
+    length = tl.load(length_ptr)
+    chunk_size_limit = min(chunk_size, length - chunk_id * chunk_size)
     C_grad_acc = tl.zeros((CHUNK_TILE_SIZE, STATE_TILE_SIZE), dtype=tl.float32)
 
     # Pre-load C tile for decay gradient computation
@@ -555,6 +570,7 @@ def chunk_scan_backward_CB_kernel(
     decay_cumsum_ptr,   # (batch_size, num_heads, num_chunks, chunk_size)
     y_grad_ptr, # (batch_size, seq_len, num_heads, head_dim)
     CB_grad_ptr,    # (batch_size, num_chunks, num_splits, num_groups, chunk_size, chunk_size)
+    length_ptr, # (batch_size,)
 
     batch_size, seq_len, chunk_size, num_heads, head_dim, num_groups, num_heads_per_program,
 
@@ -563,6 +579,7 @@ def chunk_scan_backward_CB_kernel(
     decay_cumsum_batch_stride, decay_cumsum_head_stride, decay_cumsum_chunk_stride, decay_cumsum_chunk_element_stride,
     y_grad_batch_stride, y_grad_seq_stride, y_grad_head_stride, y_grad_head_element_stride,
     CB_grad_batch_stride, CB_grad_chunk_stride, CB_grad_split_stride, CB_grad_group_stride, CB_grad_chunk_y_stride, CB_grad_chunk_x_stride,
+    length_batch_stride,
 
     CHUNK_TILE_Y_SIZE: tl.constexpr,
     CHUNK_TILE_X_SIZE: tl.constexpr,
@@ -591,8 +608,10 @@ def chunk_scan_backward_CB_kernel(
     delta_ptr += batch_id * delta_batch_stride + head_start * delta_head_stride + chunk_id * delta_chunk_stride
     decay_cumsum_ptr += batch_id * decay_cumsum_batch_stride + head_start * decay_cumsum_head_stride + chunk_id * decay_cumsum_chunk_stride
     CB_grad_ptr += batch_id * CB_grad_batch_stride + chunk_id * CB_grad_chunk_stride + group_id * CB_grad_group_stride + split_id * CB_grad_split_stride
+    legnth_ptr += batch_id * length_batch_stride
 
-    chunk_size_limit = min(chunk_size, seq_len - chunk_id * chunk_size)
+    length = tl.load(length_ptr)
+    chunk_size_limit = min(chunk_size, length - chunk_id * chunk_size)
     chunk_size_limit_x = min(chunk_size_limit, (chunk_tile_y_id + 1) * CHUNK_TILE_Y_SIZE)
 
     # If the tile is entirely above the diagonal (row < col), store zeros and return
@@ -669,12 +688,14 @@ def bmm_chunk_backward_kernel(
     C_ptr,  # (batch_size, seq_len, num_groups, state_dim)
     CB_grad_ptr,    # (batch_size, num_chunks, num_groups, chunk_size, chunk_size)
     B_grad_ptr, # (batch_size, seq_len, num_groups, state_dim)
+    length_ptr, # (batch_size,)
 
     seq_len, chunk_size, state_dim, num_groups,
 
     C_batch_stride, C_seq_stride, C_group_stride, C_state_element_stride,
     CB_grad_batch_stride, CB_grad_chunk_stride, CB_group_stride, CB_chunk_y_element_stride, CB_chunk_x_element_stride,
     B_grad_batch_stride, B_grad_seq_stride, B_grad_group_stride, B_grad_state_element_stride,
+    length_batch_stride,
 
     CHUNK_TILE_Y_SIZE: tl.constexpr,
     CHUNK_TILE_X_SIZE: tl.constexpr,
@@ -701,8 +722,10 @@ def bmm_chunk_backward_kernel(
     C_ptr += batch_id * C_batch_stride + chunk_id * chunk_size * C_seq_stride + group_id * C_group_stride
     CB_grad_ptr += batch_id * CB_grad_batch_stride + chunk_id * CB_grad_chunk_stride + group_id * CB_group_stride
     B_grad_ptr += batch_id * B_grad_batch_stride + chunk_id * chunk_size * B_grad_seq_stride + group_id * B_grad_group_stride
+    length_ptr += batch_id * length_batch_stride
 
-    chunk_size_limit = min(chunk_size, seq_len - chunk_id * chunk_size)
+    length = tl.load(length_ptr)
+    chunk_size_limit = min(chunk_size, length - chunk_id * chunk_size)
     acc = tl.zeros((CHUNK_TILE_Y_SIZE, STATE_TILE_SIZE), dtype=tl.float32)
 
     # Accumulate B_grad += CB_grad @ C (with swapped strides to match reference)
@@ -762,6 +785,7 @@ def chunk_scan_backward_decay_cumsum_kernel(
     y_grad_ptr, # (batch_size, seq_len, num_heads, head_dim)
     CB_ptr, # (batch_size, num_chunks, num_groups, chunk_size, chunk_size)
     decay_grad_ptr,  # (batch_size, num_heads, num_chunks, num_chunk_tiles, chunk_size)
+    length_ptr,
     
     batch_size, seq_len, chunk_size, head_dim, num_heads_per_group,
 
@@ -771,6 +795,7 @@ def chunk_scan_backward_decay_cumsum_kernel(
     y_grad_batch_stride, y_grad_seq_stride, y_grad_head_stride, y_grad_head_element_stride,
     CB_batch_stride, CB_chunk_stride, CB_group_stride, CB_chunk_y_element_stride, CB_chunk_x_element_stride,
     decay_grad_batch_stride, decay_grad_head_stride, decay_grad_chunk_stride, decay_grad_chunk_tile_stride, decay_grad_chunk_element_stride,
+    length_batch_stride,
 
     CHUNK_TILE_Y_SIZE: tl.constexpr,
     CHUNK_TILE_X_SIZE: tl.constexpr,
@@ -795,8 +820,10 @@ def chunk_scan_backward_decay_cumsum_kernel(
     group_id = head_id // num_heads_per_group
     CB_ptr += batch_id * CB_batch_stride + chunk_id * CB_chunk_stride + group_id * CB_group_stride
     decay_grad_ptr += (batch_id * decay_grad_batch_stride + head_id * decay_grad_head_stride + chunk_id * decay_grad_chunk_stride + chunk_tile_y_id * decay_grad_chunk_tile_stride)
+    length_ptr += batch_id * length_batch_stride
 
-    chunk_size_limit = min(chunk_size, seq_len - chunk_id * chunk_size)
+    length = tl.load(length_ptr)
+    chunk_size_limit = min(chunk_size, length - chunk_id * chunk_size)
 
     # Load fixed row-tile of y_grad and decay_cumsum (row)
     y_grad_ptrs = y_grad_ptr + (chunk_tile_y_element_ids[:, None] * y_grad_seq_stride + head_element_ids[None, :] * y_grad_head_element_stride)
@@ -907,6 +934,7 @@ def chunk_cumsum_backward_kernel(
     delta_bias_grad_ptr,    # (num_heads,)
     delta_raw_grad_ptr, # (batch_size, seq_len, num_heads)
     A_grad_ptr, # (num_heads,)
+    length_ptr, # (batch_size,)
 
     seq_len, num_heads, chunk_size, delta_min, delta_max,
 
@@ -918,6 +946,7 @@ def chunk_cumsum_backward_kernel(
     delta_bias_grad_head_stride,
     delta_raw_grad_batch_stride, delta_raw_grad_seq_stride, delta_raw_grad_head_stride,
     A_grad_head_stride,
+    length_batch_stride,
 
     USE_DELTA_SOFTPLUS: tl.constexpr,
     HAS_DELTA_BIAS: tl.constexpr,
@@ -928,7 +957,6 @@ def chunk_cumsum_backward_kernel(
     batch_id = tl.program_id(axis=0)
     chunk_id = tl.program_id(axis=1)
     head_group_id = tl.program_id(axis=2)
-    chunk_size_limit = min(chunk_size, seq_len - chunk_id * chunk_size)
 
     head_ids = head_group_id * HEAD_GROUP_SIZE + tl.arange(0, HEAD_GROUP_SIZE)
     chunk_element_ids = tl.arange(0, CHUNK_SIZE_ALIGNED)
@@ -938,6 +966,10 @@ def chunk_cumsum_backward_kernel(
     decay_grad_total_ptr += batch_id * decay_grad_total_batch_stride + chunk_id * decay_grad_total_chunk_stride
     delta_raw_ptr += batch_id * delta_raw_batch_stride + chunk_id * chunk_size * delta_raw_seq_stride
     delta_raw_grad_ptr += batch_id * delta_raw_grad_batch_stride + chunk_id * chunk_size * delta_raw_grad_seq_stride
+    length_ptr += batch_id * length_batch_stride
+
+    length = tl.load(length_ptr)
+    chunk_size_limit = min(chunk_size, length - chunk_id * chunk_size)
 
     head_mask = head_ids < num_heads
 

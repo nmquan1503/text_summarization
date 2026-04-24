@@ -22,7 +22,8 @@ def chunk_cumsum_forward_kernel(
     delta_raw_ptr,  # (batch_size, seq_len, num_heads)
     delta_bias_ptr, # (num_heads,)
     delta_ptr,  # (batch_size, num_heads, num_chunks, chunk_size)
-    decay_cumsum_ptr,   # (batch_size, num_heads, num_chunks, chunk_size),
+    decay_cumsum_ptr,   # (batch_size, num_heads, num_chunks, chunk_size)
+    length_ptr, # (batch_size)
     
     seq_len, chunk_size, num_heads, delta_min, delta_max,
     
@@ -31,6 +32,7 @@ def chunk_cumsum_forward_kernel(
     delta_bias_head_stride,
     delta_batch_stride, delta_head_stride, delta_chunk_stride, delta_chunk_element_stride,
     decay_cumsum_batch_stride, decay_cumsum_head_stride, decay_cumsum_chunk_stride, decay_cumsum_chunk_element_stride,
+    length_batch_stride,
 
     USE_DELTA_SOFTPLUS: tl.constexpr,
     HAS_DELTA_BIAS: tl.constexpr,
@@ -41,7 +43,6 @@ def chunk_cumsum_forward_kernel(
     batch_id = tl.program_id(axis=0)
     chunk_id = tl.program_id(axis=1)
     head_group_id = tl.program_id(axis=2)
-    chunk_size_limit = min(chunk_size, seq_len - chunk_id * chunk_size)
     
     head_ids = head_group_id * HEAD_GROUP_SIZE + tl.arange(0, HEAD_GROUP_SIZE)
     chunk_element_ids = tl.arange(0, CHUNK_SIZE_ALIGNED)
@@ -50,6 +51,7 @@ def chunk_cumsum_forward_kernel(
     delta_raw_ptr += batch_id * delta_raw_batch_stride + chunk_id * chunk_size * delta_raw_seq_stride
     delta_ptr += batch_id * delta_batch_stride + chunk_id * delta_chunk_stride
     decay_cumsum_ptr += batch_id * decay_cumsum_batch_stride + chunk_id * decay_cumsum_chunk_stride
+    length_ptr += batch_id * length_batch_stride
 
     A_ptrs = A_ptr + (head_ids * A_head_stride)
     delta_raw_ptrs = delta_raw_ptr + (head_ids[:, None] * delta_raw_head_stride + chunk_element_ids[None, :] * delta_raw_seq_stride)
@@ -57,9 +59,11 @@ def chunk_cumsum_forward_kernel(
     decay_cumsum_ptrs = decay_cumsum_ptr + (head_ids[:, None] * decay_cumsum_head_stride + chunk_element_ids[None, :] * decay_cumsum_chunk_element_stride)
 
     # Load parameters and raw delta
+    length = tl.load(length_ptr)
+    chunk_size_limit = min(chunk_size, length - chunk_id * chunk_size)
     A = tl.load(A_ptrs, mask=head_ids < num_heads, other=0.0)
     delta_raw = tl.load(delta_raw_ptrs, mask=(head_ids[:, None] < num_heads) & (chunk_element_ids[None, :] < chunk_size_limit), other=0.0)
-    
+
     # delta = delta_raw + delta_bias (if present)
     if HAS_DELTA_BIAS:
         delta_bias_ptrs = delta_bias_ptr + head_ids * delta_bias_head_stride

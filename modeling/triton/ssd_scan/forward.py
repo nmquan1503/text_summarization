@@ -15,6 +15,7 @@ def chunk_cumsum_forward(
     A: torch.Tensor,
     delta_raw: torch.Tensor,
     delta_bias: torch.Tensor | None,
+    length: torch.Tensor,
     chunk_size: int,
     use_delta_softplus: bool,
     delta_limit: Tuple = (0.0, float("inf"))
@@ -24,7 +25,8 @@ def chunk_cumsum_forward(
         A: (num_heads)
         delta_raw: (batch_size, seq_len, num_heads)
         delta_bias: (num_heads,)
-    
+        length: (batch_size,)
+
     Returns:
         decay_cumsum: (batch_size, num_heads, num_chunks, chunk_size)
         delta: (batch_size, num_heads, num_chunks, chunk_size)
@@ -38,13 +40,14 @@ def chunk_cumsum_forward(
     
     grid = lambda META: (batch_size, num_chunks, triton.cdiv(num_heads, META["HEAD_GROUP_SIZE"]))
     chunk_cumsum_forward_kernel[grid](
-        A, delta_raw, delta_bias, delta, decay_cumsum,
+        A, delta_raw, delta_bias, delta, decay_cumsum, length,
         seq_len, chunk_size, num_heads, delta_limit[0], delta_limit[1],
         *(A.stride()),
         *(delta_raw.stride()),
         *(delta_bias.stride() if delta_bias is not None else (0)),
         *(delta.stride()),
         *(decay_cumsum.stride()),
+        *(length.stride()),
         use_delta_softplus,
         HAS_DELTA_BIAS=delta_bias is not None,
         CHUNK_SIZE_ALIGNED=triton.next_power_of_2(chunk_size)
@@ -225,6 +228,7 @@ def ssd_scan_forward(
     delta_raw: torch.Tensor,
     delta_bias: torch.Tensor | None,
     h_init: torch.Tensor,
+    length: torch.Tensor,
     chunk_size: int,
     use_delta_softplus: bool = True,
     delta_limit: Tuple = (0.0, float("inf")),
@@ -238,6 +242,7 @@ def ssd_scan_forward(
         delta_raw: (batch_size, seq_len, num_heads)
         delta_bias: (num_heads,)
         h_init: (batch_size, num_heads, head_dim, state_dim)
+        length: (batch_size,)
     
     Returns:
         y: (batch_size, seq_len, num_heads, head_dim)
@@ -247,7 +252,7 @@ def ssd_scan_forward(
     num_chunks = math.ceil(seq_len / chunk_size)
 
     decay_cumsum, delta = chunk_cumsum_forward(
-        A, delta_raw, delta_bias, 
+        A, delta_raw, delta_bias, length,
         chunk_size, use_delta_softplus, delta_limit
     )
     
