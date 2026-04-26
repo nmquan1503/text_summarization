@@ -48,13 +48,13 @@ class SSDScanFn(torch.autograd.Function):
         batch_size, seq_len, num_heads, head_dim = u.shape
         num_groups, state_dim = B.shape[2], B.shape[3]
 
-        check_shape(A, (num_heads), name="A")
+        check_shape(A, (num_heads,), name="A")
         check_shape(B, (batch_size, seq_len, num_groups, state_dim), name="B")
         check_shape(C, (batch_size, seq_len, num_groups, state_dim), name="C")
         check_shape(delta_raw, (batch_size, seq_len, num_heads), name="delta_raw")
-        check_shape(delta_bias, (num_heads), name="delta_bias", optional=True)
+        check_shape(delta_bias, (num_heads,), name="delta_bias", optional=True)
         check_shape(h_init, (batch_size, num_heads, head_dim, state_dim), name="h_init", optional=True)
-        check_shape(length, (batch_size), name="length", optional=True)
+        check_shape(length, (batch_size,), name="length", optional=True)
 
         u = to_contiguous(u)
         A = to_contiguous(A)
