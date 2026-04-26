@@ -66,7 +66,7 @@ class SSDScanFn(torch.autograd.Function):
         length = to_contiguous(length)
 
         if length is None:
-            length = torch.full((batch_size,), seq_len, dtype=torch.long)
+            length = torch.full((batch_size,), seq_len, dtype=torch.long, device="cuda")
 
         y, h_last = ssd_scan_forward(
             u, A, B, C, delta_raw, delta_bias, h_init, length,
