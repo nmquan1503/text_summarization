@@ -43,9 +43,5 @@ def train_seq2seq():
     trainer.train()
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--type", type=str, default="seq2seq")
-    args = parser.parse_args()
-
-    if args.type == "seq2seq":
+    if config.TYPE == "seq2seq":
         train_seq2seq()
