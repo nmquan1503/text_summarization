@@ -150,10 +150,12 @@ class Block(nn.Module):
             dim=-1
         )
 
+        ssm_residual = hidden_states
+        
+        hidden_states = hidden_states.view(batch_size, seq_len, self.num_heads, self.head_dim)
         B = B.view(batch_size, seq_len, self.num_groups, self.state_dim)
         C = C.view(batch_size, seq_len, self.num_groups, self.state_dim)
 
-        ssm_residual = hidden_states
         hidden_states, last_ssm_hiddens = SSDScanFn.apply(
             hidden_states, A, B, C, delta_raw, self.delta_bias, ssm_hiddens, lengths,
             self.chunk_size, True, self.delta_limit, True
@@ -161,6 +163,8 @@ class Block(nn.Module):
 
         if use_cache:
             self._ssm_hiddens = last_ssm_hiddens
+        
+        hidden_states = hidden_states.view(batch_size, seq_len, -1)
 
         hidden_states = hidden_states + self.D * ssm_residual
 
