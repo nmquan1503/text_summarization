@@ -23,6 +23,7 @@ def seq2seq_collate_fn(batch, pad_id):
 
 def build_seq2seq_dataloader(dataset_path: str, tokenizer: Tokenizer, shuffle=True):
     dataset = Seq2SeqDataset(dataset_path, tokenizer)
+    collate_fn=partial(seq2seq_collate_fn, pad_id=tokenizer.pad_id)
     return DataLoader(
         dataset,
         batch_size=config.BATCH_SIZE,
@@ -31,5 +32,5 @@ def build_seq2seq_dataloader(dataset_path: str, tokenizer: Tokenizer, shuffle=Tr
         pin_memory=True,
         persistent_workers=True,
         prefetch_factor=4,
-        collate_fn=seq2seq_collate_fn
+        collate_fn=collate_fn
     )
