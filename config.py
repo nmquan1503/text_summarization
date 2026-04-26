@@ -6,6 +6,10 @@ TEST_PATH = ""
 # Tokenizer config
 VOCAB_SIZE = 32000
 SPM_MODEL_PATH = ""
+PAD_ID = 0
+UNK_ID = 1
+BOS_ID = 2
+EOS_ID = 3
 
 # Training config
 BATCH_SIZE = 32

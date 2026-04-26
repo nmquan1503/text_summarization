@@ -20,10 +20,10 @@ def train_tokenizer():
         vocab_size=config.VOCAB_SIZE,
         model_type="unigram",
         character_coverage=0.9995,
-        pad_id=0,
-        unk_id=1,
-        bos_id=2,
-        eos_id=3,
+        pad_id=config.PAD_ID,
+        unk_id=config.UNK_ID,
+        bos_id=config.BOS_ID,
+        eos_id=config.EOS_ID,
         minloglevel=2
     )
 

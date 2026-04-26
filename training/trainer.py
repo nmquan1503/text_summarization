@@ -143,3 +143,11 @@ class Seq2SeqTrainer(Trainer):
             total_loss += loss.item()
         
         return total_loss / len(self.dev_loader)
+
+def auto_trainer(model, train_loader, dev_loader, optimizer, criterion):
+    if config.TYPE == "seq2seq":
+        return Seq2SeqTrainer(model, train_loader, dev_loader, optimizer, criterion)
+    elif config.TYPE == "causal_lm":
+        return CausalLMTrainer(model, train_loader, dev_loader, optimizer, criterion)
+    else:
+        raise ValueError(f"Don't support {config.TYPE} trainer.")
