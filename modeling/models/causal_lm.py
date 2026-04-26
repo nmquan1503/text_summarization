@@ -56,7 +56,7 @@ class CausalLM(nn.Module):
     def forward(
         self, 
         input_ids: torch.Tensor, 
-        lengths: torch.Tensor,
+        lengths: torch.Tensor | None = None,
         use_cache: bool = False
     ):
         """
