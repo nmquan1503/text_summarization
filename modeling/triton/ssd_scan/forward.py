@@ -262,7 +262,8 @@ def ssd_scan_forward(
     decay_last = decay_cumsum[:, :, :, -1]
     h, h_last = state_passing_forward(
         h.view(batch_size, num_chunks, num_heads, -1), 
-        h_init, decay_last
+        h_init.view(batch_size, num_heads, -1) if h_init is not None else None, 
+        decay_last
     )
 
     h = h.view(batch_size, num_chunks, num_heads, head_dim, -1)

@@ -509,9 +509,11 @@ def ssd_scan_backward(
         chunk_size, use_delta_softplus, delta_limit
     )
     h = chunk_state_forward(u, B, delta, decay_cumsum)
+    decay_last = decay_cumsum[:, :, :, -1]
     h, _ = state_passing_forward(
         h.view(batch_size, num_chunks, num_heads, -1), 
-        h_init, decay_cumsum[:, :, :, -1]
+        h_init.view(batch_size, num_heads, -1) if h_init is not None else None, 
+        decay_last
     )
     h = h.view(batch_size, num_chunks, num_heads, head_dim, -1)
     CB = bmm_chunk_forward(B, C, chunk_size, is_causal)
@@ -520,7 +522,7 @@ def ssd_scan_backward(
 
     h_grad, decay_last_grad, h_init_grad = state_passing_backward(
         h.view(batch_size, num_chunks, num_heads, head_dim * state_dim),
-        decay_cumsum[:, :, :, -1],
+        decay_last,
         h_grad.view(batch_size, num_chunks, num_heads, head_dim * state_dim),
         h_last_grad.view(batch_size, num_heads, head_dim * state_dim),
         has_h_init=h_init is not None
