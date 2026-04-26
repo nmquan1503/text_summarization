@@ -1,0 +1,5 @@
+torch
+packaging
+sentencepiece
+pandas
+tqdm

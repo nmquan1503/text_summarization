@@ -6,3 +6,20 @@ TEST_PATH = ""
 # Tokenizer config
 VOCAB_SIZE = 32000
 SPM_MODEL_PATH = ""
+
+# Training config
+BATCH_SIZE = 32
+NUM_EPOCHS = 10
+LAST_CHECKPOINT_PATH = "last_checkpoint.pt"
+BEST_MODEL_PATH = "best_model.pt"
+LEARNING_RATE = 3e-4
+RESUME_TRAINING = False
+
+# Model Config
+MODEL_DIM = 256
+STATE_DIM = 16
+CONV_KERNEL = 4
+HEAD_DIM = 8
+NUM_GROUPS = 1
+CHUNK_SIZE = 256
+NUM_LAYERS = 4
