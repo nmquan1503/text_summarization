@@ -156,7 +156,7 @@ class Block(nn.Module):
         ssm_residual = hidden_states
         hidden_states, last_ssm_hiddens = SSDScanFn.apply(
             hidden_states, A, B, C, delta_raw, self.delta_bias, ssm_hiddens, lengths,
-            chunk_size=self.chunk_size, delta_limit=self.delta_limit
+            self.chunk_size, True, self.delta_limit, True
         )
 
         if use_cache:
