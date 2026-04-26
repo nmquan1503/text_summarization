@@ -22,7 +22,7 @@ class CausalLMDataset(Dataset):
             "input_ids": torch.tensor(src + tgt[:-1], dtype=torch.long),
             "labels": torch.tensor([self.tokenizer.pad_id] * len(src) + tgt[1:], dtype=torch.long),
             "gen_input_ids": torch.tensor(src + tgt[:1], dtype=torch.long),
-            "terget_ids": tgt
+            "target_ids": tgt
         }
 
 class Seq2SeqDataset(Dataset):
