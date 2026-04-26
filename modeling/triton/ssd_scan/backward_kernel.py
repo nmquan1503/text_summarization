@@ -608,7 +608,7 @@ def chunk_scan_backward_CB_kernel(
     delta_ptr += batch_id * delta_batch_stride + head_start * delta_head_stride + chunk_id * delta_chunk_stride
     decay_cumsum_ptr += batch_id * decay_cumsum_batch_stride + head_start * decay_cumsum_head_stride + chunk_id * decay_cumsum_chunk_stride
     CB_grad_ptr += batch_id * CB_grad_batch_stride + chunk_id * CB_grad_chunk_stride + group_id * CB_grad_group_stride + split_id * CB_grad_split_stride
-    legnth_ptr += batch_id * length_batch_stride
+    length_ptr += batch_id * length_batch_stride
 
     length = tl.load(length_ptr)
     chunk_size_limit = min(chunk_size, length - chunk_id * chunk_size)
