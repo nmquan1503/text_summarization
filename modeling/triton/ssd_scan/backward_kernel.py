@@ -74,7 +74,7 @@ def chunk_scan_backward_h_kernel(
     for chunk_reduce_id in range(1 + (chunk_size_limit - 1) // CHUNK_REDUCE_SIZE):
         y_grad = tl.load(
             y_grad_ptrs + chunk_reduce_id * CHUNK_REDUCE_SIZE * y_grad_seq_stride,
-            mask=(head_tile_element_ids[:, None] < head_dim) & (chunk_reduce_element_ids[None, :] < chunk_size_limit - chunk_reduce_id * CHUNK_REDUCE_SIZE), other=0.9
+            mask=(head_tile_element_ids[:, None] < head_dim) & (chunk_reduce_element_ids[None, :] < chunk_size_limit - chunk_reduce_id * CHUNK_REDUCE_SIZE), other=0.0
         )
         decay_cumsum = tl.load(
             decay_cumsum_ptrs + chunk_reduce_id * CHUNK_REDUCE_SIZE * decay_cumsum_chunk_element_stride,
@@ -83,7 +83,7 @@ def chunk_scan_backward_h_kernel(
         scale = tl.exp(decay_cumsum)
         y_grad *= scale
         C = tl.load(
-            C_ptrs + chunk_reduce_id * CHUNK_REDUCE_SIZE * decay_cumsum_chunk_element_stride,
+            C_ptrs + chunk_reduce_id * CHUNK_REDUCE_SIZE * C_seq_stride,
             mask=(chunk_reduce_element_ids[:, None] < chunk_size_limit - chunk_reduce_id * CHUNK_REDUCE_SIZE) & (state_tile_element_ids[None, :] < state_dim), other=0.0
         )
         h_grad += tl.dot(y_grad, C)
