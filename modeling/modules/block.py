@@ -4,7 +4,10 @@ import torch.nn.functional as F
 import math
 from typing import Tuple
 
-from modeling.modules import RMSNorm, SSM, SelectiveMHA, SwiGLU
+from modeling.modules.rms_norm import RMSNorm
+from modeling.modules.ssm import SSM
+from modeling.modules.attention import SelectiveMHA
+from modeling.modules.feed_forward import SwiGLU
 
 class Block(nn.Module):
     def __init__(

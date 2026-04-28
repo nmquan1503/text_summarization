@@ -4,7 +4,7 @@ import torch.nn.functional as F
 import math
 from typing import Tuple
 
-from modeling.ops.ssd_scan import SSDScanFn
+from modeling.ops import SSDScanFn
 
 class SSM(nn.Module):
     def __init__(
