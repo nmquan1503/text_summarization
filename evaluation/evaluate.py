@@ -1,5 +1,6 @@
 import torch
 from tqdm import tqdm
+import pandas as pd
 
 from data.tokenizer import Tokenizer
 from data.dataloader import auto_dataloader
@@ -8,6 +9,7 @@ import config
 from evaluation.metrics import compute_rouge
 
 def _generate_preds_seq2seq(model, tokenizer, data_loader):
+    all_inputs = []
     all_preds = []
     all_refs = []
 
@@ -16,21 +18,26 @@ def _generate_preds_seq2seq(model, tokenizer, data_loader):
         target_ids = batch["target_ids"].to("cuda")
 
         seq_ids = model.generate(input_ids, config.MAX_NEW_TOKENS).cpu()
+        input_ids = input_ids.cpu()
         target_ids = target_ids.cpu()
 
-        for pred, tgt in zip(seq_ids, target_ids):
+        for input, pred, tgt in zip(input_ids, seq_ids, target_ids):
+            input = input.tolist()
             pred = pred.tolist()
             tgt = tgt.tolist()
 
+            input_text = tokenizer.decode(input)
             pred_text = tokenizer.decode(pred)
             tgt_text = tokenizer.decode(tgt)
 
+            all_inputs.append(input_text)
             all_preds.append(pred_text)
             all_refs.append(tgt_text)
     
-    return all_preds, all_refs
+    return all_inputs, all_preds, all_refs
 
 def _generate_preds_causal_lm(model, tokenizer, data_loader):
+    all_inputs = []
     all_preds = []
     all_refs = []
 
@@ -39,17 +46,24 @@ def _generate_preds_causal_lm(model, tokenizer, data_loader):
         target_ids = batch["target_ids"]
 
         seq_ids = model.generate(gen_input_ids, config.MAX_NEW_TOKENS).cpu()
+        input_ids = gen_input_ids.cpu()
 
-        for pred, tgt in zip(seq_ids, target_ids):
+        for input, pred, tgt in zip(input_ids, seq_ids, target_ids):
+            input = input.tolist()
             pred = pred.tolist()
+            start_pred_idx = pred.index(tokenizer.bos_id) if tokenizer.bos_id in pred else -1
+            if start_pred_idx != -1:
+                pred = pred[start_pred_idx:]
 
+            input_text = tokenizer.decode(input)
             pred_text = tokenizer.decode(pred)
             tgt_text = tokenizer.decode(tgt)
 
+            all_inputs.append(input_text)
             all_preds.append(pred_text)
             all_refs.append(tgt_text)
     
-    return all_preds, all_refs
+    return all_inputs, all_preds, all_refs
 
 def _generate_preds():
     tokenizer = Tokenizer()
@@ -66,8 +80,17 @@ def _generate_preds():
     else:
         raise ValueError(f"Don't support {config.TYPE} generation.")
 
+def _write_preds(all_inputs, all_preds, all_refs):
+    df = pd.DataFrame({
+        "source": all_inputs,
+        "target": all_refs,
+        "prediction": all_preds,
+    })
+    df.to_csv(config.PREDS_PATH, index=False)
+
 def evaluate():
-    all_preds, all_refs = _generate_preds()
+    all_inputs, all_preds, all_refs = _generate_preds()
+    _write_preds(all_inputs, all_preds, all_refs)
 
     results = {}
 
