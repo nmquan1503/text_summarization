@@ -103,7 +103,7 @@ class SelectiveMHA(nn.Module):
         scale = self.head_dim ** 0.5
         attn = (q @ k.transpose(-2, -1)) / scale
 
-        attn_bias = self.alpha * torch.log(gate)
+        attn_bias = self.alpha * torch.log(gate.clamp(min=1e-12))
         attn = attn + attn_bias[:, None, None, :]
 
         causal_mask = torch.tril(
@@ -159,7 +159,7 @@ class SelectiveMHA(nn.Module):
         new_valid = torch.ones(batch_size, 1, device=device)
         self._valid_mask = torch.cat([self._valid_mask, new_valid], dim=1)
 
-        new_bias = self.alpha * torch.log(gate).unsqueeze(1)
+        new_bias = self.alpha * torch.log(gate.clamp(min=1e-12)).unsqueeze(1)
         self._attn_bias = torch.cat([self._attn_bias, new_bias], dim=1)
         
         scale = self.head_dim ** 0.5
