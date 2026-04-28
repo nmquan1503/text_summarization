@@ -4,8 +4,7 @@ import torch.nn.functional as F
 import math
 from typing import Tuple
 
-from modeling.modules.rms_norm import RMSNorm
-from modeling.ops.ssd_scan import SSDScanFn
+from modeling.modules import RMSNorm, SSM, SelectiveMHA, SwiGLU
 
 class Block(nn.Module):
     def __init__(
@@ -26,56 +25,27 @@ class Block(nn.Module):
     ):
         super().__init__()
 
-        self.model_dim = model_dim
-        self.state_dim = state_dim
-        self.inner_dim = expansion_factor * model_dim
-        assert self.inner_dim % head_dim == 0
-        self.conv_kernel = conv_kernel
-        self.head_dim = head_dim
-        self.num_heads = self.inner_dim // head_dim
-        self.num_groups = num_groups
-        assert self.num_heads % num_groups == 0
-        self.chunk_size = chunk_size
-        self.delta_limit = delta_limit
-
-        self.norm = RMSNorm(self.model_dim)
-
-        self.in_proj = nn.Linear(self.model_dim, 2 * self.inner_dim + 2 * self.num_groups * self.state_dim + self.num_heads)
-
-        conv_dim = self.inner_dim + 2 * self.num_groups * self.state_dim
-        self.conv = nn.Conv1d(
-            in_channels=conv_dim,
-            out_channels=conv_dim,
-            kernel_size=conv_kernel,
-            groups=conv_dim,
-            padding=conv_kernel - 1
+        self.norm1 = RMSNorm(model_dim)
+        self.norm2 = RMSNorm(model_dim)
+        self.ssm = SSM(
+            model_dim=model_dim,
+            state_dim=state_dim,
+            conv_kernel=conv_kernel,
+            head_dim=head_dim,
+            num_groups=num_groups,
+            expansion_factor=expansion_factor,
+            chunk_size=chunk_size,
+            delta_limit=delta_limit,
+            A_init_range=A_init_range,
+            delta_init_limit=delta_init_limit,
+            delta_init_floor=delta_init_floor,
+            dropout_rate=dropout_rate,
+            device=device
         )
-
-        delta_init = torch.exp(
-            torch.rand(self.num_heads, device=device, dtype=torch.float32) 
-            * (math.log(delta_init_limit[1]) - math.log(delta_init_limit[0]))
-            + math.log(delta_init_limit[0])
-        )
-        delta_init = torch.clamp(delta_init, min=delta_init_floor)
-        inv_delta_init = delta_init + torch.log(-torch.expm1(-delta_init))
-        self.delta_bias = nn.Parameter(inv_delta_init)
-        self.delta_bias._no_weight_decay = True
-    
-        A = torch.empty(self.num_heads, dtype=torch.float32, device=device).uniform_(*A_init_range)
-        A_log = torch.log(A)
-        self.A_log = nn.Parameter(A_log)
-        self.A_log._no_weight_decay = True
-
-        self.D = nn.Parameter(torch.ones(self.inner_dim, device=device))
-        self.D._no_weight_decay = True
-
-        self.out_proj = nn.Linear(self.inner_dim, self.model_dim)
-    
+        self.gate_proj = nn.Linear(model_dim, 1)
+        self.mha = SelectiveMHA(model_dim, head_dim)
+        self.ffn = SwiGLU(model_dim, model_dim * expansion_factor)
         self.dropout = nn.Dropout(dropout_rate)
-
-        self._ssm_hiddens = None
-        # (batch_size, conv_dim, conv_kernel - 1)
-        self._conv_context = None
 
     def forward(
         self, 
@@ -96,84 +66,19 @@ class Block(nn.Module):
             hidden_states: (batch_size, seq_len, model_dim)
             last_ssm_hiddens: (batch_size, inner_dim, state_dim)
         """
-        batch_size, seq_len, _ = hidden_states.shape
-        device = hidden_states.device
-        has_conv_context = conv_context is not None
 
-        block_residual = hidden_states
+        res = hidden_states
+        hidden_states = self.norm1(hidden_states)
+        ssm_out, last_ssm_hiddens = self.ssm(hidden_states, lengths, ssm_hiddens, conv_context, use_cache)
+        gate = torch.sigmoid(self.gate_proj(F.silu(ssm_out)))
+        hidden_states = self.mha(hidden_states, lengths, gate, use_cache)
+        hidden_states = res + self.dropout(hidden_states)
+
+        res = hidden_states
+        hidden_states = self.norm2(hidden_states)
+        hidden_states = self.ffn(hidden_states)
+        hidden_states = res + self.dropout(hidden_states)
         
-        hidden_states = self.norm(hidden_states)
-
-        hBC, gate_logits, delta_raw = torch.split(
-            self.in_proj(hidden_states),
-            [
-                self.inner_dim + 2 * self.num_groups * self.state_dim,
-                self.inner_dim,
-                self.num_heads
-            ],
-            dim=-1
-        )
-
-        A = -torch.exp(self.A_log)
-
-        hBC = hBC.transpose(1, 2)
-
-        if has_conv_context:
-            hBC = torch.cat([conv_context, hBC], dim=2)
-
-        if use_cache:
-            # Cache conv context
-            cache_size = self.conv_kernel - 1
-            total_len = hBC.size(2)
-            if total_len >= cache_size:
-                cached_ctx = hBC[:, :, -cache_size:].detach()
-            else:
-                pad_left = cache_size - total_len
-                cached_ctx = F.pad(hBC, (pad_left, 0), value=0).detach()
-            self._conv_context = cached_ctx
-        
-        hBC = F.silu(hBC)
-        hBC = self.conv(hBC).transpose(1, 2)
-
-        if has_conv_context:
-            hBC = hBC[:, self.conv_kernel - 1 : self.conv_kernel - 1 + seq_len]
-        else:
-            hBC = hBC[:, :seq_len]
-
-        hidden_states, B, C = torch.split(
-            hBC,
-            [
-                self.inner_dim,
-                self.num_groups * self.state_dim,
-                self.num_groups * self.state_dim
-            ],
-            dim=-1
-        )
-
-        ssm_residual = hidden_states
-        
-        hidden_states = hidden_states.view(batch_size, seq_len, self.num_heads, self.head_dim)
-        B = B.view(batch_size, seq_len, self.num_groups, self.state_dim)
-        C = C.view(batch_size, seq_len, self.num_groups, self.state_dim)
-
-        hidden_states, last_ssm_hiddens = SSDScanFn.apply(
-            hidden_states, A, B, C, delta_raw, self.delta_bias, ssm_hiddens, lengths,
-            self.chunk_size, True, self.delta_limit, True
-        )
-
-        if use_cache:
-            self._ssm_hiddens = last_ssm_hiddens
-        
-        hidden_states = hidden_states.view(batch_size, seq_len, -1)
-
-        hidden_states = hidden_states + self.D * ssm_residual
-
-        hidden_states = hidden_states * F.silu(gate_logits)
-
-        hidden_states = self.out_proj(hidden_states)
-
-        hidden_states = self.dropout(hidden_states) + block_residual
-
         return hidden_states, last_ssm_hiddens
 
     def step(self, hidden_states: torch.Tensor):
@@ -181,15 +86,17 @@ class Block(nn.Module):
         Args: (batch_size, model_dim)
         Returns: (batch_size, model_dim)
         """
-        hidden_states = hidden_states.unsqueeze(1)
-        chunk_size = self.chunk_size
-        self.chunk_size = 1
-        hidden_states, _ = self.forward(
-            hidden_states=hidden_states,
-            ssm_hiddens=self._ssm_hiddens,
-            conv_context=self._conv_context,
-            use_cache=True
-        )
-        self.chunk_size = chunk_size
 
-        return hidden_states.squeeze(1)
+        res = hidden_states
+        hidden_states = self.norm1(hidden_states)
+        ssm_out = self.ssm.step(hidden_states)
+        gate = torch.sigmoid(self.gate_proj(F.silu(ssm_out)))
+        hidden_states = self.mha.step(hidden_states, gate)
+        hidden_states = res + self.dropout(hidden_states)
+
+        res = hidden_states
+        hidden_states = self.norm2(hidden_states)
+        hidden_states = self.ffn(hidden_states)
+        hidden_states = res + self.dropout(hidden_states)
+
+        return hidden_states
