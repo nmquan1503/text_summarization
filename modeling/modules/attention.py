@@ -131,7 +131,7 @@ class SelectiveMHA(nn.Module):
         """
         Args:
             hidden_states: (batch_size, model_dim)
-            gate: (batch_size)
+            gate: (batch_size,)
         
         Returns:
             hidden_states: (batch_size, model_dim)
