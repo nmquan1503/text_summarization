@@ -113,7 +113,7 @@ class CausalLM(nn.Module):
             last_indices = lengths - 1
 
             logits = self.forward(input_ids, lengths, use_cache=True)
-            logits = logits[:, last_indices]
+            logits = logits[torch.arange(batch_size, device=device), last_indices]
 
             seq_ids = input_ids
             finished = torch.zeros(batch_size, dtype=torch.bool, device=device)

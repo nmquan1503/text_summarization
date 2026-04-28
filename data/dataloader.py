@@ -30,7 +30,8 @@ def causal_lm_collate_fn(batch):
         "lengths": torch.tensor([ip.size(0) for ip in gen_input_ids], dtype=torch.long),
         "input_ids": pad_sequence(input_ids, batch_first=True, padding_value=config.PAD_ID),
         "labels": pad_sequence(labels, batch_first=True, padding_value=config.PAD_ID),
-        "target_ids": tgt_ids
+        "target_ids": tgt_ids,
+        "gen_input_ids": pad_sequence(gen_input_ids, batch_first=True, padding_value=config.PAD_ID)
     }
 
 def auto_dataloader(tokenizer: Tokenizer, mode="train"):
