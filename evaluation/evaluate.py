@@ -45,7 +45,7 @@ def _generate_preds_causal_lm(model, tokenizer, data_loader):
         gen_input_ids = batch["gen_input_ids"].to("cuda")
         target_ids = batch["target_ids"]
 
-        seq_ids = model.generate(gen_input_ids, config.MAX_NEW_TOKENS).cpu()
+        seq_ids = model.generate(gen_input_ids, config.MAX_NEW_TOKENS, config.GATE_THRESHOLD).cpu()
         input_ids = gen_input_ids.cpu()
 
         for input, pred, tgt in zip(input_ids, seq_ids, target_ids):

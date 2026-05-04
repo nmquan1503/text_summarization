@@ -56,7 +56,8 @@ class Block(nn.Module):
         lengths: torch.Tensor | None = None,
         ssm_hiddens: torch.Tensor | None = None, 
         conv_context: torch.Tensor | None = None,
-        use_cache: bool = False
+        use_cache: bool = False,
+        gate_threshold: float = 0.0
     ):
         """
         Args:
@@ -74,7 +75,7 @@ class Block(nn.Module):
         hidden_states = self.norm1(hidden_states)
         ssm_out, last_ssm_hiddens = self.ssm(hidden_states, lengths, ssm_hiddens, conv_context, use_cache)
         gate = torch.sigmoid(self.gate_proj(F.silu(ssm_out))).squeeze(-1)
-        hidden_states = self.mha(hidden_states, lengths, gate, use_cache)
+        hidden_states = self.mha(hidden_states, lengths, gate, use_cache, gate_threshold)
         hidden_states = res + self.dropout(hidden_states)
 
         res = hidden_states
@@ -84,7 +85,7 @@ class Block(nn.Module):
         
         return hidden_states, last_ssm_hiddens
 
-    def step(self, hidden_states: torch.Tensor):
+    def step(self, hidden_states: torch.Tensor, gate_threshold: float = 0.0):
         """
         Args: (batch_size, model_dim)
         Returns: (batch_size, model_dim)
@@ -94,7 +95,7 @@ class Block(nn.Module):
         hidden_states = self.norm1(hidden_states)
         ssm_out = self.ssm.step(hidden_states)
         gate = torch.sigmoid(self.gate_proj(F.silu(ssm_out))).squeeze(-1)
-        hidden_states = self.mha.step(hidden_states, gate)
+        hidden_states = self.mha.step(hidden_states, gate, gate_threshold)
         hidden_states = res + self.dropout(hidden_states)
 
         res = hidden_states

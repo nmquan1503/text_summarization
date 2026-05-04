@@ -57,7 +57,8 @@ class CausalLM(nn.Module):
         self, 
         input_ids: torch.Tensor, 
         lengths: torch.Tensor | None = None,
-        use_cache: bool = False
+        use_cache: bool = False,
+        gate_threshold: float = 0.0
     ):
         """
         Args: 
@@ -71,14 +72,14 @@ class CausalLM(nn.Module):
         hidden_states = self.embedding(input_ids)
         
         for layer in self.layers:
-            hidden_states, _ = layer(hidden_states, lengths=lengths, use_cache=use_cache)
+            hidden_states, _ = layer(hidden_states, lengths=lengths, use_cache=use_cache, gate_threshold=gate_threshold)
         
         hidden_states = self.norm(hidden_states)
         logits = self.lm_head(hidden_states)
 
         return logits
 
-    def step(self, input_ids: torch.Tensor):
+    def step(self, input_ids: torch.Tensor, gate_threshold: float = 0.0):
         """
         Args:
             input_ids: (batch_size,)
@@ -88,13 +89,13 @@ class CausalLM(nn.Module):
         """
         hidden_states = self.embedding(input_ids)
         for layer in self.layers:
-            hidden_states = layer.step(hidden_states)
+            hidden_states = layer.step(hidden_states, gate_threshold)
         hidden_states = self.norm(hidden_states)
         logits = self.lm_head(hidden_states)
 
         return logits
 
-    def generate(self, input_ids: torch.Tensor, max_new_tokens=100):
+    def generate(self, input_ids: torch.Tensor, max_new_tokens=100, gate_threshold=0.0):
         """
         Args:
             input_ids: (batch_size, seq_len)
@@ -112,7 +113,7 @@ class CausalLM(nn.Module):
             lengths = (input_ids != pad_id).sum(dim=1)
             last_indices = lengths - 1
 
-            logits = self.forward(input_ids, lengths, use_cache=True)
+            logits = self.forward(input_ids, lengths, use_cache=True, gate_threshold=gate_threshold)
             logits = logits[torch.arange(batch_size, device=device), last_indices]
 
             seq_ids = input_ids
@@ -128,7 +129,7 @@ class CausalLM(nn.Module):
                 if finished.all():
                     break
 
-                logits = self.step(next_token.squeeze(1))
+                logits = self.step(next_token.squeeze(1), gate_threshold)
 
             eos_mask = (seq_ids == eos_id)
             first_eos = eos_mask.float().cumsum(dim=1) >= 1

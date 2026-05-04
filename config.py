@@ -31,4 +31,5 @@ NUM_LAYERS = 4
 
 # Infer config
 MAX_NEW_TOKENS = 150
+GATE_THRESHOLD = 0.2
 PREDS_PATH = "preds.csv"

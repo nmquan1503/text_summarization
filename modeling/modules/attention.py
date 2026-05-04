@@ -77,7 +77,7 @@ class SelectiveMHA(nn.Module):
         self._attn_bias = None
         self._valid_mask = None
 
-    def forward(self, hidden_states, lengths, gate, use_cache=False):
+    def forward(self, hidden_states, lengths, gate, use_cache=False, gate_threshold=0.0):
         """
         Args:
             hidden_states: (batch_size, seq_len, dim)
@@ -88,6 +88,10 @@ class SelectiveMHA(nn.Module):
             hidden_states: (batch_size, seq_len, dim)
         """
         batch_size, seq_len, _ = hidden_states.shape
+        device = hidden_states.device
+
+        if use_cache:
+            gate[gate < gate_threshold] = 1e-12
 
         q = self.q_proj(hidden_states)
         k = self.k_proj(hidden_states)
@@ -127,7 +131,7 @@ class SelectiveMHA(nn.Module):
 
         return self.out_proj(out)
 
-    def step(self, hidden_states, gate):
+    def step(self, hidden_states, gate, gate_threshold=0.0):
         """
         Args:
             hidden_states: (batch_size, model_dim)
@@ -139,6 +143,8 @@ class SelectiveMHA(nn.Module):
 
         batch_size, _ = hidden_states.shape
         device = hidden_states.device
+
+        gate[gate < gate_threshold] = 1e-12
 
         current_lengths = self._valid_mask.sum(dim=1)
 
