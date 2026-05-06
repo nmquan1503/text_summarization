@@ -8,6 +8,7 @@ from modeling.modules.rms_norm import RMSNorm
 from modeling.modules.ssm import SSM
 from modeling.modules.attention import SelectiveMHA
 from modeling.modules.feed_forward import SwiGLU
+from modeling.modules.multilevel_conv1d import MultiLevelConv1D
 
 class Block(nn.Module):
     def __init__(
@@ -23,6 +24,7 @@ class Block(nn.Module):
         A_init_range: Tuple[int, int] = (1, 16),
         delta_init_limit: Tuple[float, float] = (0.001, 0.1),
         delta_init_floor: float = 1e-4,
+        multilevel_conv_radius: int = 2,
         dropout_rate: float = 0.15,
         device="cuda"
     ):
@@ -30,6 +32,7 @@ class Block(nn.Module):
 
         self.norm1 = RMSNorm(model_dim)
         self.norm2 = RMSNorm(model_dim)
+        self.norm3 = RMSNorm(model_dim)
         self.ssm = SSM(
             model_dim=model_dim,
             state_dim=state_dim,
@@ -45,7 +48,7 @@ class Block(nn.Module):
             dropout_rate=dropout_rate,
             device=device
         )
-        self.gate_proj = nn.Linear(model_dim, 1)
+        self.gate_conv = MultiLevelConv1D(model_dim, 1, multilevel_conv_radius)
         self.mha = SelectiveMHA(model_dim, head_dim)
         self.ffn = SwiGLU(model_dim, model_dim * expansion_factor)
         self.dropout = nn.Dropout(dropout_rate)
@@ -73,13 +76,17 @@ class Block(nn.Module):
 
         res = hidden_states
         hidden_states = self.norm1(hidden_states)
-        ssm_out, last_ssm_hiddens = self.ssm(hidden_states, lengths, ssm_hiddens, conv_context, use_cache)
-        gate = torch.sigmoid(self.gate_proj(F.silu(ssm_out))).squeeze(-1)
-        hidden_states = self.mha(hidden_states, lengths, gate, use_cache, gate_threshold)
+        hidden_states, last_ssm_hiddens = self.ssm(hidden_states, lengths, ssm_hiddens, conv_context, use_cache)
         hidden_states = res + self.dropout(hidden_states)
 
         res = hidden_states
         hidden_states = self.norm2(hidden_states)
+        gate = torch.sigmoid(self.gate_conv(hidden_states).unsqueeze(-1))
+        hidden_states = self.mha(hidden_states, lengths, gate, use_cache, gate_threshold)
+        hidden_states = res + self.dropout(hidden_states)
+
+        res = hidden_states
+        hidden_states = self.norm3(hidden_states)
         hidden_states = self.ffn(hidden_states)
         hidden_states = res + self.dropout(hidden_states)
         
@@ -95,6 +102,9 @@ class Block(nn.Module):
         hidden_states = self.norm1(hidden_states)
         ssm_out = self.ssm.step(hidden_states)
         gate = torch.sigmoid(self.gate_proj(F.silu(ssm_out))).squeeze(-1)
+        with open("temp.json", "w") as f:
+            import json
+            json.dump(gate.tolist())
         hidden_states = self.mha.step(hidden_states, gate, gate_threshold)
         hidden_states = res + self.dropout(hidden_states)
 

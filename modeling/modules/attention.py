@@ -53,6 +53,34 @@ def apply_rotary(q, k, cos, sin, mode="seq"):
 
     return q_rot, k_rot
 
+def build_attn_matrix(attn_matrix, gate):
+    """
+    attn_matrix: (batch_size, num_heads, seq_len, seq_len)
+    gate: (batch_size, k + 1, seq_len)
+    """
+    batch_size, num_heads, seq_len, _ = attn_matrix.shape
+    K = gate.shape[1] - 1
+    device = attn_matrix.device
+
+    idx = torch.arange(seq_len, device=device)
+    rel = idx[:, None] - idx[None, :]
+    future_mask = rel < 0
+    dist = rel.clamp(min=0, max=K)
+    level = K - dist
+    gate = gate.unsqueeze(1)
+    gate = gate.clamp(min=1e-12)
+    level_idx = level.unsqueeze(0).unsqueeze(0)
+    level_idx = level_idx.expand(batch_size, num_heads, seq_len, seq_len)
+    gate = torch.gather(
+        gate.expand(batch_size, num_heads, K + 1, seq_len),
+        dim=2,
+        index=level_idx
+    )
+    attn_matrix = attn_matrix + torch.log(gate)
+    attn_matrix = attn_matrix.masked_fill(future_mask.unsqueeze(0).unsqueeze(0), float("-inf"))
+    return attn_matrix
+
+
 class SelectiveMHA(nn.Module):
     def __init__(self, dim, head_dim):
         super().__init__()
@@ -82,16 +110,13 @@ class SelectiveMHA(nn.Module):
         Args:
             hidden_states: (batch_size, seq_len, dim)
             lengths: (batch_size)
-            gate: (batch_size, seq_len)
+            gate: (batch_size, mlconv_radius + 1, seq_len)
         
         Returns:
             hidden_states: (batch_size, seq_len, dim)
         """
         batch_size, seq_len, _ = hidden_states.shape
         device = hidden_states.device
-
-        if use_cache:
-            gate[gate < gate_threshold] = 1e-12
 
         q = self.q_proj(hidden_states)
         k = self.k_proj(hidden_states)
@@ -107,14 +132,7 @@ class SelectiveMHA(nn.Module):
         scale = self.head_dim ** 0.5
         attn = (q @ k.transpose(-2, -1)) / scale
 
-        attn_bias = self.alpha * torch.log(gate.clamp(min=1e-12))
-        attn = attn + attn_bias[:, None, None, :]
-
-        causal_mask = torch.tril(
-            torch.ones(seq_len, seq_len, device=hidden_states.device, dtype=torch.bool)
-        )[None, None, :, :]
-
-        attn = attn.masked_fill(~causal_mask, float("-inf"))
+        attn = build_attn_matrix(attn, gate)
 
         attn = F.softmax(attn, dim=-1)
 
@@ -122,12 +140,12 @@ class SelectiveMHA(nn.Module):
 
         out = out.transpose(1, 2).contiguous().view(batch_size, seq_len, self.dim)
 
-        if use_cache:
-            self._k_rot = k
-            self._v = v
-            self._attn_bias = attn_bias
-            idx = torch.arange(seq_len, device=hidden_states.device)[None, :]
-            self._valid_mask = (idx < lengths[:, None]).float()
+        # if use_cache:
+        #     self._k_rot = k
+        #     self._v = v
+        #     self._attn_bias = attn_bias
+        #     idx = torch.arange(seq_len, device=hidden_states.device)[None, :]
+        #     self._valid_mask = (idx < lengths[:, None]).float()
 
         return self.out_proj(out)
 
