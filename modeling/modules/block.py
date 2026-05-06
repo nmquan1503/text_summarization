@@ -81,7 +81,7 @@ class Block(nn.Module):
 
         res = hidden_states
         hidden_states = self.norm2(hidden_states)
-        gate = torch.sigmoid(self.gate_conv(hidden_states).unsqueeze(-1))
+        gate = torch.sigmoid(self.gate_conv(hidden_states).squeeze(-1))
         hidden_states = self.mha(hidden_states, lengths, gate, use_cache, gate_threshold)
         hidden_states = res + self.dropout(hidden_states)
 
