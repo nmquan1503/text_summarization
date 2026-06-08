@@ -50,7 +50,7 @@ def test_forward_step():
 
     # source input (không dùng token đặc biệt)
     enc_input_ids = torch.randint(3, vocab_size, (batch_size, src_len), device=device)
-    enc_attention_mask = torch.ones(batch_size, src_len, device=device)
+    enc_attention_mask = torch.ones(batch_size, src_len, device=device, dtype=torch.bool)
 
     # target đầy đủ: BOS + tgt_len token ngẫu nhiên (tổng độ dài L = tgt_len+1)
     dec_full = torch.empty(batch_size, tgt_len + 1, dtype=torch.long, device=device)
@@ -122,7 +122,7 @@ def test_generate_forward():
     vocab_size = cfg.vocab_size
 
     enc_input_ids = torch.randint(3, vocab_size, (batch_size, src_len), device=device)
-    enc_attention_mask = torch.ones(batch_size, src_len, device=device)
+    enc_attention_mask = torch.ones(batch_size, src_len, device=device, dtype=torch.bool)
 
     gen_ids = model.generate(enc_input_ids, max_new_tokens=max_new)
     # gen_ids shape: (batch, max_new + 1) vì có BOS ban đầu
