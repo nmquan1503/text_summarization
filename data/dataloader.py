@@ -12,7 +12,7 @@ def seq2seq_collate_fn(batch):
 
     input_ids = pad_sequence(input_ids, batch_first=True, padding_value=config.PAD_ID)
     target_ids = pad_sequence(target_ids, batch_first=True, padding_value=config.PAD_ID)
-    attention_mask = (input_ids != config.PAD_ID).long()
+    attention_mask = (input_ids != config.PAD_ID)
 
     return {
         "input_ids": input_ids,
