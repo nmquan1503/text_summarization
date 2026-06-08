@@ -1,6 +1,5 @@
 import config
 from modeling.models.seq2seq import Seq2Seq, Seq2SeqConfig
-from modeling.models.causal_lm import CausalLM, CausalLMConfig
 
 def auto_model():
     return Seq2Seq(Seq2SeqConfig(
