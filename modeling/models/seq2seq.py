@@ -71,7 +71,7 @@ class Seq2Seq(nn.Module):
         dec_hidden_states = self.embedding(dec_input_ids)
 
         for layer in self.encoder_layers:
-            enc_hidden_states = layer(enc_hidden_states)
+            enc_hidden_states = layer(enc_hidden_states, enc_attention_mask)
         
         kv_cache = []
 
