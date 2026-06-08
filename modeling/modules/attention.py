@@ -128,7 +128,7 @@ class MHA(nn.Module):
         seq_len = k_cache.shape[-2]
         device = hidden_states.device
 
-        current_lengths = torch.tensor([seq_len] * batch_size, dtype=torch.long)
+        current_lengths = torch.tensor([seq_len] * batch_size, dtype=torch.long, device=device)
 
         q = self.q_proj(hidden_states)
         k = self.k_proj(hidden_states)
