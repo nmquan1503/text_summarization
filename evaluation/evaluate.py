@@ -36,35 +36,6 @@ def _generate_preds_seq2seq(model, tokenizer, data_loader):
     
     return all_inputs, all_preds, all_refs
 
-def _generate_preds_causal_lm(model, tokenizer, data_loader):
-    all_inputs = []
-    all_preds = []
-    all_refs = []
-
-    for batch in tqdm(data_loader, desc="Test"):
-        gen_input_ids = batch["gen_input_ids"].to("cuda")
-        target_ids = batch["target_ids"]
-
-        seq_ids = model.generate(gen_input_ids, config.MAX_NEW_TOKENS).cpu()
-        input_ids = gen_input_ids.cpu()
-
-        for input, pred, tgt in zip(input_ids, seq_ids, target_ids):
-            input = input.tolist()
-            pred = pred.tolist()
-            start_pred_idx = pred.index(tokenizer.bos_id) if tokenizer.bos_id in pred else -1
-            if start_pred_idx != -1:
-                pred = pred[start_pred_idx:]
-
-            input_text = tokenizer.decode(input)
-            pred_text = tokenizer.decode(pred)
-            tgt_text = tokenizer.decode(tgt)
-
-            all_inputs.append(input_text)
-            all_preds.append(pred_text)
-            all_refs.append(tgt_text)
-    
-    return all_inputs, all_preds, all_refs
-
 def _generate_preds():
     tokenizer = Tokenizer()
     test_loader = auto_dataloader(tokenizer, "test")
@@ -73,12 +44,7 @@ def _generate_preds():
     model.load_state_dict(torch.load(config.BEST_MODEL_PATH, map_location=device))
     model.eval()
 
-    if config.TYPE == "seq2seq":
-        return _generate_preds_seq2seq(model, tokenizer, test_loader)
-    elif config.TYPE == "causal_lm":
-        return _generate_preds_causal_lm(model, tokenizer, test_loader)
-    else:
-        raise ValueError(f"Don't support {config.TYPE} generation.")
+    return _generate_preds_seq2seq(model, tokenizer, test_loader)
 
 def _write_preds(all_inputs, all_preds, all_refs):
     df = pd.DataFrame({

@@ -53,14 +53,15 @@ def apply_rotary(q, k, cos, sin, mode="seq"):
 
     return q_rot, k_rot
 
-class SelectiveMHA(nn.Module):
-    def __init__(self, dim, head_dim):
+class MHA(nn.Module):
+    def __init__(self, dim, head_dim, is_causal):
         super().__init__()
         assert dim % head_dim == 0
 
         self.dim = dim
         self.num_heads = dim // head_dim
         self.head_dim = head_dim
+        self.is_causal = is_causal
 
         assert self.head_dim % 2 == 0, "head_dim must be even for RoPE"
 
@@ -70,19 +71,11 @@ class SelectiveMHA(nn.Module):
 
         self.out_proj = nn.Linear(dim, dim)
 
-        self.alpha = nn.Parameter(torch.tensor(1.0))
-
-        self._k_rot = None
-        self._v = None 
-        self._attn_bias = None
-        self._valid_mask = None
-
-    def forward(self, hidden_states, lengths, gate, use_cache=False):
+    def forward(self, hidden_states, attention_mask):
         """
         Args:
             hidden_states: (batch_size, seq_len, dim)
-            lengths: (batch_size)
-            gate: (batch_size, seq_len)
+            attention_mask: (batch_size, seq_len)
         
         Returns:
             hidden_states: (batch_size, seq_len, dim)
@@ -101,46 +94,41 @@ class SelectiveMHA(nn.Module):
         q, k = apply_rotary(q, k, cos, sin)
 
         scale = self.head_dim ** 0.5
-        attn = (q @ k.transpose(-2, -1)) / scale
+        attn_score = (q @ k.transpose(-2, -1)) / scale
 
-        attn_bias = self.alpha * torch.log(gate.clamp(min=1e-12))
-        attn = attn + attn_bias[:, None, None, :]
+        if self.is_causal:
+            causal_mask = torch.tril(
+                torch.ones(seq_len, seq_len, device=hidden_states.device, dtype=torch.bool)
+            )[None, None, :, :]
+            attn_score = attn_score.masked_fill(~causal_mask, float("-inf"))
 
-        causal_mask = torch.tril(
-            torch.ones(seq_len, seq_len, device=hidden_states.device, dtype=torch.bool)
-        )[None, None, :, :]
+        if attention_mask is not None:
+            attn_score = attn_score.masked_fill(~attention_mask[:, None, None, :], float("-inf"))            
 
-        attn = attn.masked_fill(~causal_mask, float("-inf"))
+        attn_weight = F.softmax(attn_score, dim=-1)
 
-        attn = F.softmax(attn, dim=-1)
-
-        out = attn @ v
+        out = attn_weight @ v
 
         out = out.transpose(1, 2).contiguous().view(batch_size, seq_len, self.dim)
 
-        if use_cache:
-            self._k_rot = k
-            self._v = v
-            self._attn_bias = attn_bias
-            idx = torch.arange(seq_len, device=hidden_states.device)[None, :]
-            self._valid_mask = (idx < lengths[:, None]).float()
+        return self.out_proj(out), k, v
 
-        return self.out_proj(out)
-
-    def step(self, hidden_states, gate):
+    def step(self, hidden_states, k_cache, v_cache):
         """
         Args:
             hidden_states: (batch_size, model_dim)
-            gate: (batch_size,)
+            k_cache, v_cache: (batch_size, num_heads, seq_len, head_dim)
         
         Returns:
             hidden_states: (batch_size, model_dim)
+            k, v: (batch_size, num_heads, seq_len + 1, head_dim)
         """
 
         batch_size, _ = hidden_states.shape
+        seq_len = k_cache.shape[-2]
         device = hidden_states.device
 
-        current_lengths = self._valid_mask.sum(dim=1)
+        current_lengths = torch.tensor([seq_len] * batch_size, dtype=torch.long)
 
         q = self.q_proj(hidden_states)
         k = self.k_proj(hidden_states)
@@ -153,27 +141,65 @@ class SelectiveMHA(nn.Module):
         cos, sin = build_rope_cache(current_lengths, self.head_dim, device, mode='pos')
         q, k = apply_rotary(q, k, cos, sin, mode='pos')
 
-        self._k_rot = torch.cat([self._k_rot, k], dim=2)
-        self._v = torch.cat([self._v, v], dim=2)
+        k = torch.cat([k_cache, k], dim=2)
+        v = torch.cat([v_cache, v], dim=2)
 
-        new_valid = torch.ones(batch_size, 1, device=device)
-        self._valid_mask = torch.cat([self._valid_mask, new_valid], dim=1)
-
-        new_bias = self.alpha * torch.log(gate.clamp(min=1e-12)).unsqueeze(1)
-        self._attn_bias = torch.cat([self._attn_bias, new_bias], dim=1)
-        
         scale = self.head_dim ** 0.5
-        attn = (q @ self._k_rot.transpose(-2, -1)) / scale
+        attn_score = (q @ k.transpose(-2, -1)) / scale
 
-        attn = attn + self._attn_bias[:, None, None, :]
+        attn_score = F.softmax(attn_score, dim=-1)
+        out = attn_score @ v
+        out = out.transpose(1, 2).contiguous().view(batch_size, self.dim)
 
-        attn = attn.masked_fill(
-            self._valid_mask[:, None, None, :] == 0,
+        return self.out_proj(out), k, v
+
+
+class CrossMHA(nn.Module):
+    def __init__(self, dim, head_dim):
+        super().__init__()
+
+        assert dim % head_dim == 0
+
+        self.dim = dim
+        self.num_heads = dim // head_dim
+        self.head_dim = head_dim
+
+        self.q_proj = nn.Linear(dim, dim)
+        self.k_proj = nn.Linear(dim, dim)
+        self.v_proj = nn.Linear(dim, dim)
+
+        self.out_proj = nn.Linear(dim, dim)
+
+    def forward(self, hidden_states, context, context_attention_mask):
+        """
+        Args:
+            hidden_states: (batch_size, seq_len, dim)
+            context: (batch_size, context_len, dim)
+            context_attention_mask: (batch_size, context_len)
+        """
+
+        batch_size, seq_len, _ = hidden_states.shape
+        context_len = context.shape[1]
+
+        q = self.q_proj(hidden_states)
+        k = self.k_proj(context)
+        v = self.v_proj(context)
+
+        q = q.view(batch_size, seq_len, self.num_heads, self.head_dim).transpose(1, 2)
+        k = k.view(batch_size, context_len, self.num_heads, self.head_dim).transpose(1, 2)
+        v = v.view(batch_size, context_len, self.num_heads, self.head_dim).transpose(1, 2)
+
+        attn_score = (q @ k.transpose(-2, -1)) / (self.head_dim ** 0.5)
+
+        attn_score = attn_score.masked_fill(
+            ~context_attention_mask[:, None, None, :],
             float("-inf")
         )
 
-        attn = F.softmax(attn, dim=-1)
-        out = attn @ self._v
-        out = out.transpose(1, 2).contiguous().view(batch_size, self.dim)
+        attn_weight = F.softmax(attn_score, dim=-1)
+
+        out = attn_weight @ v
+
+        out = out.transpose(1, 2).contiguous().view(batch_size, -1, self.dim)
 
         return self.out_proj(out)

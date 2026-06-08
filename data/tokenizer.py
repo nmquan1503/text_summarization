@@ -59,5 +59,18 @@ class Tokenizer:
         
         return ids
 
+    def _clean(self, ids: List[int]):
+        if self.bos_id in ids:
+            ids = ids[ids.index(self.bos_id) + 1:]
+        if self.eos_id in ids:
+            ids = ids[:ids.index(self.eos_id)]
+        return ids
+
     def decode(self, ids: List[int] | List[List[int]]):
+        if not ids:
+            return []
+        if isinstance(ids[0], list):
+            ids = [self._clean(it) for it in ids]
+        else:
+            ids = self._clean(ids)
         return self.sp.Decode(ids)

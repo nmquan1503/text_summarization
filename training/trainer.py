@@ -59,45 +59,6 @@ class Trainer:
                 "dev_losses": self.dev_losses
             }, config.LAST_CHECKPOINT_PATH)
 
-
-class CausalLMTrainer(Trainer):
-    def _train_one_epoch(self):
-        self.model.train()
-        total_loss = 0.0
-        for batch in tqdm(self.train_loader, desc="Train"):
-            self.optimizer.zero_grad()
-
-            input_ids = batch["input_ids"].to(self.device)
-            labels = batch["labels"].to(self.device)
-
-            logits = self.model(input_ids)
-
-            loss = self.criterion(logits.view(-1, config.VOCAB_SIZE), labels.view(-1))
-
-            loss.backward()
-            torch.nn.utils.clip_grad_norm_(self.model.parameters(), 1.0)
-            self.optimizer.step()
-
-            total_loss += loss.item()
-
-        return total_loss / len(self.train_loader)
-
-    @torch.no_grad()
-    def _eval(self):
-        self.model.eval()
-        total_loss = 0.0
-        for batch in tqdm(self.dev_loader, desc="Eval"):
-            input_ids = batch["input_ids"].to(self.device)
-            labels = batch["labels"].to(self.device)
-
-            logits = self.model(input_ids)
-            
-            loss = self.criterion(logits.view(-1, config.VOCAB_SIZE), labels.view(-1))
-
-            total_loss += loss.item()
-        
-        return total_loss / len(self.dev_loader)
-
 class Seq2SeqTrainer(Trainer):    
     def _train_one_epoch(self):
         self.model.train()
@@ -106,13 +67,13 @@ class Seq2SeqTrainer(Trainer):
             self.optimizer.zero_grad()
 
             input_ids = batch["input_ids"].to(self.device)
-            input_lengths = batch["input_lengths"].to(self.device)
+            attention_mask = batch["attention_mask"].to(self.device)
             target_ids = batch["target_ids"].to(self.device)
 
             decoder_input = target_ids[:, :-1]
             labels = target_ids[:, 1:]
 
-            logits = self.model(input_ids, input_lengths, decoder_input)
+            logits, _, _ = self.model(input_ids, attention_mask, decoder_input)
 
             loss = self.criterion(logits.view(-1, config.VOCAB_SIZE), labels.reshape(-1))
 
@@ -130,13 +91,13 @@ class Seq2SeqTrainer(Trainer):
         total_loss = 0.0
         for batch in tqdm(self.dev_loader, desc="Eval"):
             input_ids = batch["input_ids"].to(self.device)
-            input_lengths = batch["input_lengths"].to(self.device)
+            attention_mask = batch["attention_mask"].to(self.device)
             target_ids = batch["target_ids"].to(self.device)
 
             decoder_input = target_ids[:, :-1]
             labels = target_ids[:, 1:]
 
-            logits = self.model(input_ids, input_lengths, decoder_input)
+            logits, _, _ = self.model(input_ids, attention_mask, decoder_input)
 
             loss = self.criterion(logits.view(-1, config.VOCAB_SIZE), labels.reshape(-1))
 
@@ -145,9 +106,4 @@ class Seq2SeqTrainer(Trainer):
         return total_loss / len(self.dev_loader)
 
 def auto_trainer(model, train_loader, dev_loader, optimizer, criterion):
-    if config.TYPE == "seq2seq":
-        return Seq2SeqTrainer(model, train_loader, dev_loader, optimizer, criterion)
-    elif config.TYPE == "causal_lm":
-        return CausalLMTrainer(model, train_loader, dev_loader, optimizer, criterion)
-    else:
-        raise ValueError(f"Don't support {config.TYPE} trainer.")
+    return Seq2SeqTrainer(model, train_loader, dev_loader, optimizer, criterion)
